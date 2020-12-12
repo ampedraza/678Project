@@ -1,0 +1,459 @@
+---
+title: "Midterm Project"
+author: "Alison Pedraza MA678"
+date: "12/11/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidyquant)
+library(dplyr)
+library(ggplot2)
+library(rstanarm)
+library(arm)
+library(knitr)
+library(magrittr)
+library(lme4)
+library(broom)
+
+```
+
+# What is the Relationship Between the Wealth of the 1% and the US Stock Market?
+
+### Abstract
+
+In this study, I looked at what effect the net worth of the top 1% of income earners as well as their equity could have on the market cap of the U.S. stock market. Since this is a causal question (Is the stock market currently over valued because there is an influx of money coming from the top 1% of income earners?), I used a propensity score model with a linear regression outcome model. However, I also used a multilevel linear regression model since I was not satisfied with the former model's results and was not convinced that, although this seems like a causal question, a causal approach was the logical approach to take.
+
+### Summary
+Over the past 40 years there has been a decrease in wage growth of the U.S. labor force while the net worth or yearly income of the top 1% of income earners has increased steadily every year. At the same time, the value of stocks in the U.S. stock market has increased without logical reasoning. In other words, the total value of shares in the stock market is larger than the gross domestic product (the value of what those companies have produced). For this reason, the stock market is considered to be overvalued. Why is there so much money invested into the stock market when the total value of all finished goods and services of the United States is much lower? What I am asking is: has the increase in the net worth of the 1% income earners caused the overvaluation of stocks? Is the money that is not going to the labor force ending up in the stock market through the 1% earners of the United States?
+
+For this study, I ran two models: one using a propensity score model, and another using a multilevel regression model.
+
+My predictors are the following:
+
+  + Market Capitalization
+  + Net Worth of all the income earners (Top1, Next9, Next40, Bottom50)
+  + Corporate Equities and Mutual Funds held by the above four categories
+  + Labor share (income earned for every dollar produced through labor)
+  + Output (the amount of goods and services produced in (dollars))
+
+
+    
+```{r  echo= FALSE, warning=FALSE}
+#us_labor <- read.csv("us_labor share.csv", fileEncoding = "UTF-8-BOM")
+us_labor_2 <- read.csv("us labor_2.csv", fileEncoding = "UTF-8-BOM")
+world_mrkt_cap <- read.csv("world_market_cap_%GDP.csv", fileEncoding = "UTF-8-BOM")
+world_gdp <- read.csv("World GDP.csv", fileEncoding = "UTF-8-BOM")
+net_worth_orig <- read.csv("dfa-networth-levels.csv", fileEncoding = "UTF-8-BOM")
+real_int_orig <- read.csv("Real Interest Rates.csv",fileEncoding = "UTF-8-BOM" )
+##PERCENT SHARE
+
+##---------------------------Market Cap
+world1_mrkt_cap <- world_mrkt_cap[-c(1,2,3),]
+world2_mrkt_cap <- world1_mrkt_cap[, -c(2:24)]
+world3_mrkt_cap <- world2_mrkt_cap[-c(1),]
+
+
+colnames(world3_mrkt_cap)<- c("Country", "1980", "1981", "1982", "1983", "1984", "1985", "1986",
+                          "1987", "1988", "1989", "1990", "1991", "1992", "1993", "1994", 
+                          "1995", "1996", "1997", "1998", "1999", "2000", "2001", "2002", "2003",
+                          "2004", "2005", "2006", "2007", "2008", "2009", "2010", "2011", "2012",
+                          "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020")
+
+
+world4_mrkt_cap <- world3_mrkt_cap[,-c(41,42)]
+
+us.mrkt.filter <- world4_mrkt_cap%>% filter(Country == "United States")
+
+us_mrkt_cap <- pivot_longer(us.mrkt.filter, cols = "1980":"2018", names_to = "Year", values_to = "Market Cap")
+```
+
+
+```{r echo= FALSE, warning=FALSE}
+### Real Interest Rates
+
+real1_int_orig <- real_int_orig[-c(1,2,3),]
+real2_int_orig <- real1_int_orig[, -c(2:24)]
+real3_int_orig <- real2_int_orig[-c(1),]
+
+
+colnames(real3_int_orig)<- c("Country", "1980", "1981", "1982", "1983", "1984", "1985", "1986",
+                          "1987", "1988", "1989", "1990", "1991", "1992", "1993", "1994", 
+                          "1995", "1996", "1997", "1998", "1999", "2000", "2001", "2002", "2003",
+                          "2004", "2005", "2006", "2007", "2008", "2009", "2010", "2011", "2012",
+                          "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020")
+
+
+real4_int_orig <- real3_int_orig[,-c(41,42)]
+
+real.int.filter <- real4_int_orig%>% filter(Country == "United States")
+
+interest_rates <- pivot_longer(real.int.filter, cols = "1980":"2018", names_to = "Year", values_to = "Real_Int_Rates")
+
+```
+
+
+
+
+```{r echo= FALSE, warning=FALSE}
+##======================== LABOR SHARE
+
+us_labor_2$Year <- as.character(us_labor_2$Year)
+
+
+us_labor2 <- us_labor_2[-c(2), -c(3,5,6,7,8,9,10, 11, 13, 14, 15, 16, 17, 18)]
+
+us_labor3 <- us_labor2[-c(1:168),]
+
+
+
+##======================= MARKET CAP & LABOR SHARE
+        ##Left Join both us_labor & us_mrkt_cap
+
+new_dataframe <- cbind(us_mrkt_cap,  c(1980:2018))
+remove_Year <- new_dataframe[-c(1:9),-c(4)]
+colnames(remove_Year)<- c("Country", "Year", "Market_Cap")
+
+labor_mrkt_data <- left_join(remove_Year, us_labor3, by = c("Year"))
+labor_mrkt_data$Year<-as.numeric(labor_mrkt_data$Year)
+
+```
+
+
+```{r echo= FALSE, warning=FALSE}
+## -===================== NET WORTH
+
+
+
+net_worth_year <- net_worth_orig[,-c(4:15)]
+net_worth_year%<>%separate(Date, c("Year", "Quarter"), sep= ":")
+net_worth_year2 <- net_worth_year %>% filter(Quarter == "Q4")
+
+net_worth_year3<- net_worth_year2[,-c(2)]
+colnames(net_worth_year3)<- c("Year", "Category", "Net_Worth")
+
+net_category <- pivot_wider(net_worth_year3, names_from = "Category", values_from = "Net_Worth")
+net_worth_category <- net_category[-c(31),]
+net_worth_category$Year <- as.numeric(net_worth_category$Year)
+
+
+
+net_equity <- net_worth_orig[, -c(3,4,5,6,8,9,10,11,12,13,14,15)] 
+net_equity%<>%separate(Date, c("Year", "Quarter"), sep= ":")
+
+colnames(net_equity)<- c("Year", "Quarter", "Category", "Equity")
+net_equity2 <- net_equity %>% filter(Quarter == "Q4")
+
+net_eq <- net_equity2[,-c(2)]
+equity_wider<- pivot_wider(net_eq, names_from = "Category", 
+                           values_from = "Equity")
+colnames(equity_wider) <- c("Year", "Eq_Top1", "Eq_Next9", "Eq_Next40", "Eq_Bottom50")
+
+
+
+
+##Use for graph
+net_worth_year4 <- net_worth_orig[,-c(4,5,6,8,9,10,11,12,13,14,15)]
+net_worth_year4%<>%separate(Date, c("Year", "Quarter"), sep= ":")
+net_worth_year5 <- net_worth_year4 %>% filter(Quarter == "Q4")
+net_worth_year6<- net_worth_year5[,-c(2)]
+colnames(net_worth_year6)<- c("Year","Category","Net_Worth", "Equity")
+
+#Use for graph
+net_top1 <- net_worth_year6%>%filter(Category == "Top1")
+us_mkrt <- us_mrkt_cap[-c(1:9),]
+net_top <- net_top1[-c(31),]
+
+top1_mrkt <- left_join(net_top,us_mkrt, by = "Year")
+colnames(top1_mrkt)<- c("Year", "Category", "Net_worth", "Equity", "Country", "Market_Cap")
+```
+
+
+
+```{r echo=FALSE, warning=TRUE}
+###-----------Join Labor/mkrt with equity
+
+#-----For Multilevel model
+
+worth_labor_mkt <- left_join(net_worth_category,labor_mrkt_data, by = "Year" )
+
+equity_data <- equity_wider[-c(31),]
+equity_data$Year <- as.numeric(equity_data$Year)
+
+labor_mkt_equity <- left_join(equity_data, worth_labor_mkt, by = "Year")
+#------------------For Causal model
+labor_data <- labor_mrkt_data%>%filter(Qtr == 4)
+labor_data2 <- labor_data[,-c(4)]
+net_w <- net_worth_year5%>%filter(Quarter == "Q4")
+net_w$Year<- as.numeric(net_w$Year)
+data_frame <- left_join(labor_data2, net_w, by = "Year")
+
+data_frame$Category <- c(1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4)
+
+### ---For Graphing
+
+data_frame2 <- left_join(labor_data2, net_w, by = "Year")
+
+
+```
+
+
+### EDA Plots
+
+Some EDA plots were done to see if infact there is a difference in net worth and equity between the different income earning households and to see if there was a trend of increased value of the market cap with time. I wanted to see if there could be a positive relationship between the net worth and equity of the top 1% with the market cap. A positive realtionship could suggest that there is some causal relationship.
+
+
+#### Net Worth for Income Levels per Year
+
+If we look at equity holdings and net worth for each of the income levels, we see that while the net worth and equity holdings have remained the same for the bottom 50% of income earners, they have increased for both the top 9% and top 1%. If market cap has also increased during this same time frame it could suggest that there is a relationship between the predictors and the market cap. 
+```{r echo= FALSE, warning=FALSE}
+
+
+g <- ggplot(data = net_worth_year3, mapping = aes(x=Year, y = Net_Worth)) + geom_point( aes(color = Category), shape = 19) + 
+  ggtitle("Net Worth for Each Economic Houshold Segment per Year (1989 - 2018)" ) +
+  labs(y = "Net Worth (Trillion dollars)" , x = "Years") +
+  theme(axis.text.x = element_text(angle = 45)) 
+g
+
+
+```
+
+
+#### Market Cap and Equity of the Top 1% per Year 
+
+From the below graph, we can see that indeed as market cap has increased every year along with the equity of the top 1% of income earners. 
+```{r echo=FALSE, warning=FALSE}
+
+
+m <- ggplot(data = top1_mrkt, mapping = aes(x=Year, y = Market_Cap)) + geom_point( aes( size = Equity), shape = 19) + 
+  ggtitle("Market Cap of Stock Market and Equity of Top 1% (1989 - 2018)" ) +
+  labs(y = "Market Cap (%)" , x = "Years") +
+  theme(axis.text.x = element_text(angle = 45)) 
+m
+
+```
+
+#### Corporate Equities Holdings for Each Economic Category vs Market Cap
+Below is a chart of corporate equities held by each of the income earner levels. As can be seen, the equity held by the top 1% has increased steadily and dramatically since 1989 while that cannot be said by the next 90% of economic income earner levels.
+
+```{r echo= FALSE, warning=FALSE}
+
+equity_category_plot <- ggplot(data= net_eq, 
+                mapping = aes(x = Year, y= Equity)) + 
+          geom_point(aes(color = Category),  shape = 19) +
+              ggtitle("Equity Holdings for Each Economic Houshold Segment (1989 - 2018)" ) +
+  labs(y = "Equity and Mutual Fund Holdings (dollars)" , x = "Years") +
+  theme(axis.text.x = element_text(angle = 45))
+
+equity_category_plot
+
+```
+
+```{r echo= FALSE, warning=FALSE}
+
+### --------------------Summary of Data
+
+
+#net_worth_data <- net_worth_orig_year[,-c(2,5,7,9,10,11,13,15)]
+
+
+
+```
+
+### My Assumptions
+
+My assumptions are that the net worth of the 1%, their corporate equity and mutual fund holdings, the labor share of the US worker, and the output produced all have some relationship with the increase in market capitalization of the U.S. stock market. Below is a diagram showing my assumptions. Since 1989, as output has increased, the labor share for the US worker has steadily decreased while maintaining a steady average weekly hours rate. Where has the difference in income gone if not to the workers who have produced it?
+
+The increase in dollar output produced is not going to the majority of the American work force. The net worth of the top 1% is increasing as well as their equity. Therefore, my assumptions are that increased output, reduced labor share by the majority of the US labor force, the difference in equity held by the four categories of households, and the net worth of the 1% is causing the stock market to be inflated.:
+
+Increased output, labor share, and equity are affecting the top 1% of earners who are then investing those dollars into the stock market. Therefore, output, labor share, and equity are also affecting the market capitalization. 
+
+A diagram of my assumptions can be found in the Appendix.
+
+
+# Causal Inference
+Causal inference was used to see if the top 1% income earners have an effect on the market cap. A propensity model was fitted in which the three confounders were labor_share, equity, and output. My groups were Top1%, Next9%, Next 40%, and Bottom 50%. My counterfactual argument is: what if all of the income earners had the same income (or more realistically, all had income levels that were very close), would the market cap still be affected? Below is a histogram of the propensity scores where:
+
+ + Category 1 = Top 1%
+ + Category 2 = Next 9%
+ + Category 3 = Next 40%
+ + Category 4 = Bottom 50%
+ 
+The histogram showed a higher count for the Top 1% and much fewer counts for the Bottom 50%. This may be because of their value in term of net worth. The x-axis of this histogram should represent the probability of being in one of the four categories. In this case, there is less probability to be in the top 1% than it is to be in the Next 40% and Bottom 50%.
+
+The histogram can be found in the Appendix.
+```{r echo= FALSE, warning=FALSE}
+##----------propensity score
+
+library(broom)
+propensity_model <- glm(Category ~ Net.worth + Corporate.equities.and.mutual.fund.shares + Output + Labor.share, data = data_frame)
+
+```
+
+```{r echo= FALSE, warning=FALSE}
+df<- propensity_model %>% augment(type.predict = "response", data = data_frame)
+
+```
+
+
+#### Fitting the Outcome Model
+
+After doing the propensity scores, I weighted the four categories. Since the data was done over time, it looks like the weighting considered each year that came up for all four categories. In this sense, in a way, it considered each year to have a new "individual" of that category.
+  
+  For the outcome model I used a basic linear model : lm()
+  
+  model <- lm(Market_Cap ~ Category, data = df2, weights = w_ate)%>% tidy()
+
+I used this model since my outcome (Market Cap) is continuous and from the EDA there seems to be a linear relationship between the outcome and the predictors. A summary results of this model is below:
+  
+Although the p-value is less than 0.05, I am not convinced that this was the right approach to this question. Although this was a causal question, there was no treatment involved. It could be thought that the treatment was the degree of net worth (high net worth or very low net worth).  Or, the argument could be that the market cap of the stock market would increase regardless of which category held the most weatlth (if the Top 1% category held the least amount of wealth and the Bottom 50% held the most wealth).
+
+```{r echo=FALSE, warning=FALSE}
+###Weighting 
+
+df <- df %>% mutate(w_ate = Category/.fitted +(1-Category)/(1-.fitted))
+
+
+```
+
+
+
+```{r warnings = FALSE}
+##-----Fitting Outcome model
+df2 <- df[-c(113),]
+model <- lm(Market_Cap ~ Category, data = df2, weights = w_ate)%>% tidy()
+
+#summary(model)
+print(model)
+```
+
+
+### Multilevel model:
+
+Since I was not satisfied with the result from the previous model, I tried to answer the question using a multilevel model linear regression model.
+
+In my multilevel model I used stan_lmer to see if I could get a better result. I included the same predictors : equity, labor.share, and net worth with market cap as the output. 
+
+The results of my model show the coefficient for net worth is zero while the coefficient for labor share had a number of different slopes. This tells me that as the market cap increases, the net worth of the 1% does not change. This is not what was seen in the EDA.
+
+The results also show that the slopes for all the labor share is positive. However, even though they are positive, the rate of the slopes' decreases as the labor share decreases. This was visible in the EDA. 
+
+The residuals for my multilevel model did not show a pattern and most of the residuals were very close to zero. This seems to say that the observed values are not different from the predicted values. However, since the model gave me a coefficient of zero for net worth, these residuals may simply be reflecting that result. 
+
+```{r warning = FALSE}
+
+model2 = stan_lmer(Market_Cap ~ Corporate.equities.and.mutual.fund.shares + Labor.share +Net.worth + Output + (1|Category),data=data_frame2,refresh=0);model2
+
+
+
+```
+
+
+
+
+
+#### Conclusion
+
+Both models were unsuccessful in determining whether or not the four predictors influence the market cap value and growth. Although both models gave interesting results, the coefficients were not appropriate and the residuals were not acceptable. It is possible a simple linear regression model would work best with this kind of data. Although the EDA showed trends in equity and wealth of the top 1% of income earners and the increase in market cap over the years, the propensity score modeling and linear regression method as well as the multilevel linear regression model did not show a causation between the predictors and the outcome. They were both inconclusive in determining whether or not there is causation between the wealth and equity of the 1% income earners and the increase in the market cap.
+
+
+### Appendix
+
+In this appendix you will find additional plots of the residuals and qqplots for the multilevel linear regression model as well as data sources and explanation of units.
+
+#### Data Sources:
+- US Labor Market
+  - U.S. Bureau of Labor Statistics: https://www.bls.gov/lpc/data.htm <br>
+    
+- US Market Cap as Percent GDP
+  - World Bank Database:
+  https://data.worldbank.org/indicator/CM.MKT.LCAP.GD.ZS?end=2018&locations=US&start=1980&view=chart
+
+- Wealth Data on the Top 1%
+   - The Federal Researve:     https://www.federalreserve.gov/releases/z1/dataviz/dfa/distribute/chart/#quarter:0;series:Net%20worth;demographic:networth;population:1,3,5,7;units:levels;range:2005.2,2020.2
+    
+#### Calculations and Units
+Both market capitalization and labor share are expressed in percentages and on a per year basis:
+
+  - Labor Share = 
+    (compensation earned in dollars / total current dollar output produced) * 100
+  
+  - Market Capitalization as % of GDP = 
+    (US Market Cap. in US dollars / GDP in US dollars) * 100
+    
+  - Net Worth: the total value of assets a person owns minus the total liabilities he                   or she owes.
+  
+
+#### Diagram of Assumptions for Causal Relationship
+     
+```{r echo= FALSE, warning=FALSE}
+library(ggdag)
+     dagify(
+            Market_Cap ~ Eq_Top1,
+            Net_Worth ~ Eq_Top1,
+            Market_Cap ~ Output,
+            Net_Worth ~ Output,
+            Market_Cap ~ Labor,
+            Net_Worth ~ Labor,
+            exposure = "Output",
+            outcome = "Market_Cap"
+            )%>%ggdag()
+
+#ggdag_adjustment_set(plot_dag)
+```
+
+#### Histogram of the Propensity score
+```{r echo= FALSE, warning=FALSE}
+
+ggplot(df, aes(.fitted, group = Category, fill = factor(Category))) +geom_histogram()
+```
+
+
+
+
+#### Residuals for the Multilevel model
+```{r echo=FALSE, warning=FALSE}
+
+par(mar=c(3,3,2,1), mgp=c(2,.7,0), tck=-.01)
+plot(fitted(model2),resid(model2),pch=20,main="Residuals: Labor Share with Output and Equity Interaction Model")
+abline(0,0)
+
+
+```
+
+
+
+## Below are residuals of other simple linear regression models:
+
+
+### Residuals for Output:lm(Market_Cap ~ Output")
+This is a residual plot for a linear regression model I tried with the data. There does seem to be a pattern. Output may not be linearly related to market cap. 
+```{r echo=FALSE, warning=FALSE}
+
+fit_output <- lm(Market_Cap ~ Output, data=data_frame2, refresh = 0) 
+summary(fit_output)
+par(mar=c(3,3,2,1), mgp=c(2,.7,0), tck=-.01)
+plot(fitted(fit_output),resid(fit_output),pch=20,main="Residuals: lm(Market_Cap ~ Output")
+abline(0,0)
+
+```
+
+### Residuals for Labor Share:  lm(Market_Cap ~ Labor_share")
+
+```{r echo=FALSE, warning=FALSE}
+
+fit_labor <- lm(Market_Cap ~ Labor.share, data=data_frame2, refresh = 0) 
+summary(fit_labor)
+par(mar=c(3,3,2,1), mgp=c(2,.7,0), tck=-.01)
+plot(fitted(fit_labor),resid(fit_labor),pch=20,main="Residuals: lm(Market_Cap ~ Labor_share")
+abline(0,0)
+
+
+
+```
+
+
